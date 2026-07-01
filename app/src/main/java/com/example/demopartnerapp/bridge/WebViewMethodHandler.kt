@@ -1,6 +1,7 @@
 package com.example.demopartnerapp.bridge
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,11 +9,13 @@ import android.graphics.Color
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -128,6 +131,7 @@ class WebViewMethodHandler(private val host: BridgeHost) {
         JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.permissionsData(statuses))
     }
 
+    @SuppressLint("MissingPermission")
     fun reportLocation() {
         if (!hasLocationPermission()) {
             JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.locationData("denied", null, null))
@@ -135,20 +139,50 @@ class WebViewMethodHandler(private val host: BridgeHost) {
         }
         try {
             val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val loc = lm.getProviders(true).asSequence()
+
+            // Fast path: a cached fix is available.
+            val cached = lm.getProviders(true).asSequence()
                 .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
                 .maxByOrNull { it.time }
-            if (loc != null) {
-                JavaScriptEvaluator.sendToPwa(
-                    web, JavaScriptCodeBuilder.locationData("granted", loc.latitude, loc.longitude),
-                )
-            } else {
+            if (cached != null) {
+                sendCoords(cached.latitude, cached.longitude)
+                return
+            }
+
+            // No cache: actively request a single current fix (emulator's last-known is often null).
+            val provider = when {
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                else -> null
+            }
+            if (provider == null) {
                 JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.locationData("failed", null, null))
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                LocationManagerCompat.getCurrentLocation(
+                    lm, provider, null, ContextCompat.getMainExecutor(ctx),
+                ) { loc ->
+                    if (loc != null) sendCoords(loc.latitude, loc.longitude)
+                    else JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.locationData("failed", null, null))
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                lm.requestSingleUpdate(provider, object : android.location.LocationListener {
+                    override fun onLocationChanged(loc: android.location.Location) =
+                        sendCoords(loc.latitude, loc.longitude)
+                    override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+                    override fun onProviderEnabled(p: String) {}
+                    override fun onProviderDisabled(p: String) {}
+                }, ctx.mainLooper)
             }
         } catch (e: SecurityException) {
             JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.locationData("denied", null, null))
         }
     }
+
+    private fun sendCoords(lat: Double, lon: Double) =
+        JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.locationData("granted", lat, lon))
 
     // ---- action helpers ----
 
