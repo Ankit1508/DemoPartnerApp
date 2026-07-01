@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">DemoPartnerApp</string>
+    <string name="cta_pwa">Proceed with PWA</string>
+    <string name="cta_api">Proceed with Partner API</string>
+</resources>

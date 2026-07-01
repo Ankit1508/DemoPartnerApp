@@ -1,0 +1,12 @@
+## Copy to local.properties and fill in. local.properties is gitignored.
+sdk.dir=/path/to/Android/sdk
+
+# ekincare demo config (also editable at runtime in the app)
+EKIN_PWA_HOST=https://app-test.ekincare.com
+EKIN_API_BASE=https://staging.ekincare.com
+EKIN_PARTNER_SLUG=
+EKIN_ENCODED_KEY=
+EKIN_ENCODED_IV=
+EKIN_ENTITY_ID=
+EKIN_API_USERNAME=
+EKIN_API_PASSWORD=

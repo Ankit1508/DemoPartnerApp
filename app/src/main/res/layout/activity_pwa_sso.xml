@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- Config / payload form -->
+    <ScrollView
+        android:id="@+id/formScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="16dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="PWA SSO (AES-256-GCM)"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="4dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Encrypt the payload, then load &lt;host&gt;/pwa-login?slug&amp;message&amp;auth_tag. The PWA itself posts to /v1/customers/pwa-sso/:slug."
+                android:textSize="12sp"
+                android:textColor="#777777"
+                android:layout_marginBottom="16dp" />
+
+            <EditText android:id="@+id/etPwaHost" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="PWA host (https://staging.ekincare.com)" android:inputType="textUri" />
+            <EditText android:id="@+id/etSlug" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Partner slug" android:inputType="text" />
+            <EditText android:id="@+id/etKey" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="encoded_key (base64)" android:inputType="text" />
+            <EditText android:id="@+id/etIv" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="encoded_iv (base64)" android:inputType="text" />
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Payload" android:textStyle="bold" android:layout_marginTop="12dp" />
+
+            <EditText android:id="@+id/etEntityId" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="entity_id (company id)" android:inputType="number" />
+            <EditText android:id="@+id/etEmail" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="email (unique)" android:inputType="textEmailAddress" />
+            <EditText android:id="@+id/etFirstName" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="first_name" android:inputType="textPersonName" />
+            <EditText android:id="@+id/etLastName" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="last_name" android:inputType="textPersonName" />
+            <EditText android:id="@+id/etGender" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="gender (Male/Female)" android:inputType="text" />
+            <EditText android:id="@+id/etMobile" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="mobile" android:inputType="phone" />
+            <EditText android:id="@+id/etMemberId" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="member_id (employee id)" android:inputType="text" />
+            <EditText android:id="@+id/etDob" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="dob (YYYY-MM-DD)" android:inputType="text" />
+            <EditText android:id="@+id/etDeeplink" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="deeplink (e.g. benefits)" android:inputType="text" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnLaunch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:padding="14dp"
+                android:text="Encrypt &amp; Launch PWA" />
+
+            <TextView
+                android:id="@+id/tvDebug"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:textSize="11sp"
+                android:fontFamily="monospace"
+                android:textColor="#555555" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- WebView shown after launch -->
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+</LinearLayout>

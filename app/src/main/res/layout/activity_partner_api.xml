@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Partner REST API"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Basic auth -> GET /api/get-access-token -> use Bearer token for a sample call."
+            android:textSize="12sp"
+            android:textColor="#777777"
+            android:layout_marginBottom="16dp" />
+
+        <EditText android:id="@+id/etApiBase" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="API base (https://staging.ekincare.com)" android:inputType="textUri" />
+        <EditText android:id="@+id/etUsername" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="username" android:inputType="text" />
+        <EditText android:id="@+id/etPassword" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="password" android:inputType="textPassword" />
+        <EditText android:id="@+id/etSamplePath" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="sample GET path (/api/providers)" android:inputType="textUri" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnGetToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:padding="14dp"
+            android:text="Get Token" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSampleCall"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:padding="14dp"
+            android:enabled="false"
+            android:text="Run Sample Call (Bearer)" />
+
+        <TextView
+            android:id="@+id/tvOutput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"
+            android:textColor="#222222" />
+
+    </LinearLayout>
+</ScrollView>
