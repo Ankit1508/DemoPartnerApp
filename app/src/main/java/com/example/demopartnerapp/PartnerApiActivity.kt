@@ -2,6 +2,7 @@ package com.example.demopartnerapp
 
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import com.example.demopartnerapp.databinding.ActivityPartnerApiBinding
 import okhttp3.Call
@@ -26,8 +27,10 @@ class PartnerApiActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         b = ActivityPartnerApiBinding.inflate(layoutInflater)
         setContentView(b.root)
+        applyEdgeToEdgeInsets(b.root)
         title = "Partner API"
 
         b.etApiBase.setText(BuildConfig.EKIN_API_BASE)

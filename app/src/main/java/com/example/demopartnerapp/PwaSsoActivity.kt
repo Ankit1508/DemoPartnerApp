@@ -18,6 +18,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -88,8 +89,10 @@ class PwaSsoActivity :
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         b = ActivityPwaSsoBinding.inflate(layoutInflater)
         setContentView(b.root)
+        applyEdgeToEdgeInsets(b.root)
         title = "PWA SSO"
         methodHandler = WebViewMethodHandler(this)
 
@@ -167,6 +170,12 @@ class PwaSsoActivity :
             databaseEnabled = true
             setGeolocationEnabled(true)       // allow navigator.geolocation
             mediaPlaybackRequiresUserGesture = false
+            // Honor the PWA's <meta viewport width=device-width>. Without these the
+            // WebView lays out at a default (wider) width, so responsive full-width
+            // elements (e.g. the fixed bottom nav: left-1/2 + w-100%) overflow and
+            // get clipped on the right. Mirrors the ekincare app's PwaWebViewActivity.
+            useWideViewPort = true
+            loadWithOverviewMode = true
         }
 
         // Inject the bridge exactly like EkincarePwa's PwaWebViewActivity.
