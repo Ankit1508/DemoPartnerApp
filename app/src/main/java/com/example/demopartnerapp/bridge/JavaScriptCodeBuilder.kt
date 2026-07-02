@@ -1,5 +1,6 @@
 package com.example.demopartnerapp.bridge
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -33,6 +34,23 @@ object JavaScriptCodeBuilder {
 
     fun paymentFailure(code: Int, message: String): String =
         envelope("paymentFailure", JSONObject().put("code", code).put("message", message))
+
+    fun connectHealthConnect(): String = envelope("connectHealthConnectWearable")
+
+    /** { action: syncSteps, payload: { todaySteps, todayCalories, steps:[...], source, last_synced_at, device_name } } */
+    fun syncSteps(todaySteps: Int, todayCalories: Int, lastSyncedAt: String, deviceName: String): String {
+        val steps = JSONArray().put(
+            JSONObject().put("count", todaySteps).put("calories", todayCalories),
+        )
+        val payload = JSONObject()
+            .put("todaySteps", todaySteps.toString())
+            .put("todayCalories", todayCalories.toString())
+            .put("steps", steps)
+            .put("source", "android")
+            .put("last_synced_at", lastSyncedAt)
+            .put("device_name", deviceName)
+        return envelope("syncSteps", payload)
+    }
 
     fun disconnectHealthConnect(): String = envelope("disconnectHealthConnectWearable")
     fun disconnectNativeWearable(): String = envelope("disconnectNativeWearable")

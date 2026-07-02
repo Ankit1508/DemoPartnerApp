@@ -2,7 +2,7 @@
 sdk.dir=/path/to/Android/sdk
 
 # ekincare demo config (also editable at runtime in the app)
-EKIN_PWA_HOST=https://app-test.ekincare.com
+EKIN_PWA_HOST=https://pwa-staging.ekincare.com
 EKIN_API_BASE=https://staging.ekincare.com
 EKIN_PARTNER_SLUG=
 EKIN_ENCODED_KEY=
