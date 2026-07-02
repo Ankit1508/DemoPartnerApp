@@ -3,7 +3,9 @@ package com.example.demopartnerapp
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.MediaStore
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
@@ -24,6 +26,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.example.demopartnerapp.bridge.BridgeLocalStorage
 import com.example.demopartnerapp.bridge.JavaScriptInterfaceee
 import com.example.demopartnerapp.bridge.PwaKeys
@@ -90,20 +93,32 @@ class PwaSsoActivity :
         }
 
     // <input type="file"> support — the WebChromeClient hands us the callback,
-    // we open the system picker and return the chosen Uri(s) to the page.
+    // we open the system picker (with a camera capture option merged in) and
+    // return the chosen Uri(s) to the page.
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingChooserParams: WebChromeClient.FileChooserParams? = null
+    private var cameraOutputUri: Uri? = null
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val cb = filePathCallback ?: return@registerForActivityResult
             filePathCallback = null
-            // parseResult handles both a single Uri and multi-select (clipData); null on cancel.
             val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
+                // A picked file comes back in the Intent; a camera capture returns no
+                // data (the image was written to cameraOutputUri we handed the camera).
                 WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+                    ?: cameraOutputUri?.let { arrayOf(it) }
             } else {
                 null
             }
             cb.onReceiveValue(uris)
+            cameraOutputUri = null
+        }
+
+    // ACTION_IMAGE_CAPTURE needs CAMERA granted because we declare it in the manifest.
+    private val cameraPermForChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            launchFileChooser(pendingChooserParams, withCamera = granted)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -238,7 +253,8 @@ class PwaSsoActivity :
             }
 
             // <input type="file"> — open the system picker (honors accept types +
-            // multiple from the page) and return the result to the WebView.
+            // multiple from the page), with a camera capture option merged in for
+            // image inputs. Returns the result to the WebView.
             override fun onShowFileChooser(
                 webView: WebView?,
                 callback: ValueCallback<Array<Uri>>?,
@@ -246,14 +262,19 @@ class PwaSsoActivity :
             ): Boolean {
                 filePathCallback?.onReceiveValue(null)   // cancel any pending request
                 filePathCallback = callback
-                return try {
-                    fileChooserLauncher.launch(params?.createIntent())
-                    true
-                } catch (e: Exception) {
-                    filePathCallback = null
-                    toast("No app available to pick a file")
-                    false
+                pendingChooserParams = params
+                if (acceptsImage(params)) {
+                    // Offer camera only if a camera exists; gate on CAMERA permission first.
+                    if (hasCamera()) {
+                        if (isGranted(Manifest.permission.CAMERA)) {
+                            launchFileChooser(params, withCamera = true)
+                        } else {
+                            cameraPermForChooserLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                        return true
+                    }
                 }
+                return launchFileChooser(params, withCamera = false)
             }
         }
 
@@ -333,6 +354,64 @@ class PwaSsoActivity :
         }
         return super.dispatchTouchEvent(ev)
     }
+
+    // ---- file chooser (with camera capture merged in) ----
+
+    private fun launchFileChooser(
+        params: WebChromeClient.FileChooserParams?,
+        withCamera: Boolean,
+    ): Boolean {
+        val content = params?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        val chooser = Intent.createChooser(content, "Select or capture")
+        if (withCamera) {
+            val cam = createCameraIntent()
+            if (cam != null && cam.resolveActivity(packageManager) != null) {
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(cam))
+            } else {
+                cameraOutputUri = null
+            }
+        }
+        return try {
+            fileChooserLauncher.launch(chooser)
+            true
+        } catch (e: Exception) {
+            filePathCallback?.onReceiveValue(null)   // don't leave the page input hanging
+            filePathCallback = null
+            cameraOutputUri = null
+            toast("No app available to pick a file")
+            false
+        }
+    }
+
+    /** ACTION_IMAGE_CAPTURE writing to a FileProvider Uri we then hand back to the WebView. */
+    private fun createCameraIntent(): Intent? = try {
+        val dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        val file = File(dir, "capture_${System.currentTimeMillis()}.jpg")
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        cameraOutputUri = uri
+        Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+    } catch (e: Exception) {
+        cameraOutputUri = null
+        null
+    }
+
+    private fun acceptsImage(params: WebChromeClient.FileChooserParams?): Boolean {
+        val types = params?.acceptTypes
+        if (types.isNullOrEmpty() || types.all { it.isBlank() }) return true  // unrestricted
+        return types.any { it.startsWith("image/") || it == "*/*" || it.contains("image") }
+    }
+
+    private fun hasCamera() =
+        packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+
+    private fun isGranted(perm: String) =
+        ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
 
     private fun hideKeyboard() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
