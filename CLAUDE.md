@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `DemoPartnerApp` — a minimal Android reference app showing the two ways a partner integrates with **ekincare**:
 
-1. **PWA SSO** (`PwaSsoActivity`) — encrypt a partner payload → load the ekincare PWA `/pwa-login` in a WebView → the PWA authenticates and lands on a deeplink (login screen skipped).
+1. **PWA SSO** (`PwaSsoActivity`) — encrypt a partner payload → load the ekincare PWA `/pwa-login` in a WebView (with the `ekincareAndroidInterface` JS bridge injected) → the PWA authenticates and lands on a deeplink (login screen skipped).
 2. **Partner REST API** (`PartnerApiActivity`) — HTTP Basic → `get-access-token` → Bearer sample call.
+
+The `bridge/` package mirrors EkincarePwa's JS↔native layer so the PWA's native calls (permissions, location, share, downloads, saveHeaders/saveCustomer, …) are serviced.
 
 `MainActivity` is just two CTAs routing to these. There is no shared business logic — each activity is self-contained.
 
@@ -47,12 +49,21 @@ EKIN_API_USERNAME / EKIN_API_PASSWORD
 
 The PWA SSO flow (`PwaSsoActivity`) depends on several ekincare backend/PWA behaviors. These fixes are load-bearing — do not regress:
 
-- **`APP-VERSION` must be seeded in the WebView** (`APP_VERSION_SHIM`, injected on page start/finish). The PWA sends an `app-version` header on every data call from `localStorage['APP-VERSION']`; the backend rejects versions below its minimum (`23.7.3`) with `401 "Please update your app"`, which the PWA treats as session-expiry → wipes auth → redirects to `/login`. Without seeding, SSO succeeds but bounces to login.
+- **`APP-VERSION` must be seeded in the WebView** (via `BridgeLocalStorage.getLocalStorageDeviceId`, injected on page start/finish; parity with EkincarePwa's `getLocalStorageDeviceId`). The PWA sends an `app-version` header on every data call from `localStorage['APP-VERSION']`; the backend rejects versions below its minimum (`23.7.3`) with `401 "Please update your app"`, which the PWA treats as session-expiry → wipes auth → redirects to `/login`. Without seeding, SSO succeeds but bounces to login. **This is the one load-bearing seed.**
 - **Query string is built manually**, not via `Uri.appendQueryParameter` — that percent-encodes the base64 `=` padding to `%3D`, which the PWA forwards undecoded and the backend fails to `urlsafe_decode64`.
-- **The WebView stays plain (no `ekincareAndroidInterface` JS bridge).** Injecting it flips the PWA into native-app mode, where it expects native to own the session and ignores the web SSO session → login.
+- **The `ekincareAndroidInterface` bridge is SAFE to inject and does NOT break SSO.** Verified against the PWA source: SSO session persistence (`PwaSSOLoginPage.js`) has no `isEkincareApp()` branch — the SSO page *itself* calls the bridge (`saveHeaders`/`saveCustomer`) to export its already-established web session to native. (An earlier version of these docs claimed the bridge flips the PWA to native-owned auth and bounces to login — that was wrong; the real bounce was always the `APP-VERSION` gate above.)
 - **SSO and data APIs must hit the same backend.** The SPA host and its configured data-API base must be one environment or the session isn't shared.
 
 `AesGcm.kt` output must stay byte-compatible with the backend `AesEncryption.gcm_decrypt`: AES-256-GCM, key/iv base64-decoded, output split into `ciphertext || 16-byte tag`, both URL-safe base64.
+
+### `bridge/` — JS↔native layer (mirrors EkincarePwa)
+
+- `JavaScriptInterfaceee` — injected as `ekincareAndroidInterface`; `postMessage(json)` + `getBase64FromBlobData(b64)`.
+- `HandleHeaderFromScript` — parses the `{action, payload}` envelope.
+- `WebViewMethodHandler` — the `when` dispatch keyed on `action`. Real handlers for permissions, location, share, external URL, status bar, close, trackEvent, saveHeaders, blob download. SDK-bound actions (payment/video/health-connect/biometric) acknowledge with a Toast + the JS callback the PWA expects, so the PWA never hangs.
+- `JavaScriptCodeBuilder` / `JavaScriptEvaluator` — native→JS via `window.handleNativeMessage({action,payload})` (main-thread `evaluateJavascript`).
+- `BridgeLocalStorage` — seeds `X-DEVICE-ID`, `APP-VERSION`, `DEVICE_NAME/TYPE`, `MFAEnabled`, `TARGET-NAME`, etc.
+- `PwaSsoActivity` implements `NativeBridgeListener` + `BridgeHost` (owns the runtime-permission launchers).
 
 ## Workflow
 

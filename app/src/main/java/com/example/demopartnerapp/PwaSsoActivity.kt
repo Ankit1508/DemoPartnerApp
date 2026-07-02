@@ -3,48 +3,75 @@ package com.example.demopartnerapp
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.MediaStore
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.util.Base64
+import android.util.Log
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
 import android.webkit.GeolocationPermissions
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import com.example.demopartnerapp.bridge.BridgeLocalStorage
+import com.example.demopartnerapp.bridge.JavaScriptInterfaceee
+import com.example.demopartnerapp.bridge.PwaKeys
+import com.example.demopartnerapp.bridge.WebViewMethodHandler
 import com.example.demopartnerapp.databinding.ActivityPwaSsoBinding
 import org.json.JSONObject
+import java.io.File
 
 /**
- * Model B — PWA SSO.
- * Build the partner payload -> AES-256-GCM encrypt -> load the PWA's /pwa-login
- * page with slug/message/auth_tag. The PWA frontend (PwaSSOLoginPage) posts to
- * /v1/customers/pwa-sso/:slug itself, stores the session, and redirects to the
- * deeplink — so ekincare's own login screen is skipped. All fields prefilled
- * with a working staging config; edit any of them before launch.
+ * Model B — PWA SSO, with the full ekincare JS bridge wired in.
  *
- * NOTE: the SSO page is loaded in a PLAIN WebView (no `ekincareAndroidInterface`
- * JS bridge). This is exactly what a partner does — open a URL in a webview. If
- * we inject that bridge (as the full-app PwaWebHostActivity does), the PWA
- * detects itself as the native ekincare app (isAndroidWebView/isEkincareApp) and
- * expects NATIVE to own the session, so the web SSO session is ignored and the
- * PWA falls back to its login page. Keep this plain.
+ * Flow: build the partner payload -> AES-256-GCM encrypt -> load the PWA's
+ * /pwa-login with slug/message/auth_tag. The PWA posts to
+ * /v1/customers/pwa-sso/:slug itself, persists the session, and redirects to the
+ * deeplink — ekincare's login screen is skipped.
+ *
+ * The WebView injects `ekincareAndroidInterface` (mirroring EkincarePwa's
+ * PwaWebViewActivity). Confirmed against the PWA source: SSO session persistence
+ * has NO isEkincareApp() branch (PwaSSOLoginPage.js) — in fact the SSO page
+ * CALLS the bridge (saveHeaders/saveCustomer) to export its web session to
+ * native. So the bridge is expected and does NOT bounce SSO to login. The one
+ * load-bearing seed is APP-VERSION (see BridgeLocalStorage) — the 401
+ * "Please update your app" gate. All bridge calls the PWA makes (permissions,
+ * location, share, etc.) are dispatched by WebViewMethodHandler.
  */
-class PwaSsoActivity : AppCompatActivity() {
+class PwaSsoActivity :
+    AppCompatActivity(),
+    JavaScriptInterfaceee.NativeBridgeListener,
+    WebViewMethodHandler.BridgeHost {
 
     private lateinit var b: ActivityPwaSsoBinding
+    private lateinit var methodHandler: WebViewMethodHandler
 
-    // Pending navigator.geolocation grant — resolved after the runtime permission prompt.
+    // WebViewMethodHandler.BridgeHost
+    override val hostActivity: AppCompatActivity get() = this
+    override val hostWebView: WebView get() = b.webView
+
+    // Pending navigator.geolocation grant (HTML5 geolocation prompt).
     private var pendingGeoOrigin: String? = null
     private var pendingGeoCallback: GeolocationPermissions.Callback? = null
 
-    private val locationPermLauncher =
+    // Pending bridge permission request — JS names to report back after the prompt resolves.
+    private var pendingBridgePermNames: List<String> = emptyList()
+
+    private val geoPermLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             val granted = result.values.any { it }
             pendingGeoCallback?.invoke(pendingGeoOrigin, granted, false)
@@ -53,11 +80,55 @@ class PwaSsoActivity : AppCompatActivity() {
             if (!granted) toast("Location permission denied")
         }
 
+    private val bridgePermLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            // Recompute + report whatever the PWA asked about, granted or not.
+            methodHandler.reportPermissionStatuses(pendingBridgePermNames)
+            pendingBridgePermNames = emptyList()
+        }
+
+    private val bridgeLocationLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            methodHandler.reportLocation()
+        }
+
+    // <input type="file"> support — the WebChromeClient hands us the callback,
+    // we open the system picker (with a camera capture option merged in) and
+    // return the chosen Uri(s) to the page.
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingChooserParams: WebChromeClient.FileChooserParams? = null
+    private var cameraOutputUri: Uri? = null
+
+    private val fileChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val cb = filePathCallback ?: return@registerForActivityResult
+            filePathCallback = null
+            val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
+                // A picked file comes back in the Intent; a camera capture returns no
+                // data (the image was written to cameraOutputUri we handed the camera).
+                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+                    ?: cameraOutputUri?.let { arrayOf(it) }
+            } else {
+                null
+            }
+            cb.onReceiveValue(uris)
+            cameraOutputUri = null
+        }
+
+    // ACTION_IMAGE_CAPTURE needs CAMERA granted because we declare it in the manifest.
+    private val cameraPermForChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            launchFileChooser(pendingChooserParams, withCamera = granted)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         b = ActivityPwaSsoBinding.inflate(layoutInflater)
         setContentView(b.root)
+        applyEdgeToEdgeInsets(b.root)
         title = "PWA SSO"
+        methodHandler = WebViewMethodHandler(this)
 
         prefill()
         b.btnLaunch.setOnClickListener { launch() }
@@ -124,8 +195,6 @@ class PwaSsoActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun openWebView(url: String) {
-        // Plain WebView — NO ekincareAndroidInterface. The PWA stays in "web" mode and
-        // persists the SSO session itself (localStorage) -> ekincare login skipped.
         b.formScroll.visibility = android.view.View.GONE
         b.btnLaunch.visibility = android.view.View.GONE
         b.webView.visibility = android.view.View.VISIBLE
@@ -134,21 +203,32 @@ class PwaSsoActivity : AppCompatActivity() {
             domStorageEnabled = true          // PWA needs localStorage/sessionStorage
             databaseEnabled = true
             setGeolocationEnabled(true)       // allow navigator.geolocation
+            mediaPlaybackRequiresUserGesture = false
+            // Honor the PWA's <meta viewport width=device-width>. Without these the
+            // WebView lays out at a default (wider) width, so responsive full-width
+            // elements (e.g. the fixed bottom nav: left-1/2 + w-100%) overflow and
+            // get clipped on the right. Mirrors the ekincare app's PwaWebViewActivity.
+            useWideViewPort = true
+            loadWithOverviewMode = true
         }
+
+        // Inject the bridge exactly like EkincarePwa's PwaWebViewActivity.
+        b.webView.addJavascriptInterface(JavaScriptInterfaceee(this), PwaKeys.JS_INTERFACE)
+
         b.webView.webViewClient = object : WebViewClient() {
-            // Close the soft keyboard on every navigation / refresh.
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 b.webView.clearFocus()
                 hideKeyboard()
-                // Seed APP-VERSION before the PWA runs (see APP_VERSION_SHIM).
-                view?.evaluateJavascript(APP_VERSION_SHIM, null)
+                // Seed device identity + APP-VERSION before the PWA runs (getLocalStorageDeviceId parity).
+                view?.evaluateJavascript(BridgeLocalStorage.getLocalStorageDeviceId(this@PwaSsoActivity), null)
             }
             override fun onPageFinished(view: WebView, u: String?) {
                 super.onPageFinished(view, u)
-                view.evaluateJavascript(APP_VERSION_SHIM, null)
+                view.evaluateJavascript(BridgeLocalStorage.getLocalStorageDeviceId(this@PwaSsoActivity), null)
             }
         }
+
         // Grant HTML5 geolocation. Plain WebView denies it by default -> "location not detected".
         b.webView.webChromeClient = object : WebChromeClient() {
             override fun onGeolocationPermissionsShowPrompt(
@@ -163,7 +243,7 @@ class PwaSsoActivity : AppCompatActivity() {
                 } else {
                     pendingGeoOrigin = origin
                     pendingGeoCallback = callback
-                    locationPermLauncher.launch(
+                    geoPermLauncher.launch(
                         arrayOf(
                             Manifest.permission.ACCESS_FINE_LOCATION,
                             Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -171,9 +251,84 @@ class PwaSsoActivity : AppCompatActivity() {
                     )
                 }
             }
+
+            // <input type="file"> — open the system picker (honors accept types +
+            // multiple from the page), with a camera capture option merged in for
+            // image inputs. Returns the result to the WebView.
+            override fun onShowFileChooser(
+                webView: WebView?,
+                callback: ValueCallback<Array<Uri>>?,
+                params: FileChooserParams?,
+            ): Boolean {
+                filePathCallback?.onReceiveValue(null)   // cancel any pending request
+                filePathCallback = callback
+                pendingChooserParams = params
+                if (acceptsImage(params)) {
+                    // Offer camera only if a camera exists; gate on CAMERA permission first.
+                    if (hasCamera()) {
+                        if (isGranted(Manifest.permission.CAMERA)) {
+                            launchFileChooser(params, withCamera = true)
+                        } else {
+                            cameraPermForChooserLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                        return true
+                    }
+                }
+                return launchFileChooser(params, withCamera = false)
+            }
         }
+
+        // Blob/data downloads (PWA hands blobs to native via getBase64FromBlobData).
+        b.webView.setDownloadListener { downloadUrl, _, _, mimeType, _ ->
+            if (downloadUrl.startsWith("blob")) {
+                b.webView.evaluateJavascript(
+                    JavaScriptInterfaceee.getBase64StringFromBlobUrl(downloadUrl, mimeType), null,
+                )
+            } else {
+                toast("Download: $downloadUrl")
+            }
+        }
+
         b.webView.loadUrl(url)
     }
+
+    // ---- JavaScriptInterfaceee.NativeBridgeListener ----
+
+    override fun onNativeMethod(data: String?) {
+        // Called off the main thread by the WebView JS bridge; handler hops to main where needed.
+        runOnUiThread { methodHandler.handleOnNativeMethod(data) }
+    }
+
+    override fun onBlobBase64(base64Data: String?) {
+        if (base64Data.isNullOrBlank()) return
+        try {
+            // Format: data:<mime>;base64,<payload>
+            val comma = base64Data.indexOf(',')
+            val raw = if (comma >= 0) base64Data.substring(comma + 1) else base64Data
+            val bytes = Base64.decode(raw, Base64.DEFAULT)
+            val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            val file = File(dir, "ekincare_${System.currentTimeMillis()}")
+            file.writeBytes(bytes)
+            runOnUiThread { toast("Saved: ${file.absolutePath}") }
+        } catch (e: Exception) {
+            Log.e("PwaBridge", "blob save failed: ${e.message}")
+        }
+    }
+
+    // ---- WebViewMethodHandler.BridgeHost async ops ----
+
+    override fun promptPermissions(androidPerms: Array<String>, jsNames: List<String>) {
+        pendingBridgePermNames = jsNames
+        bridgePermLauncher.launch(androidPerms)
+    }
+
+    override fun promptLocationThenReport() {
+        bridgeLocationLauncher.launch(
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+        )
+    }
+
+    // ---- lifecycle / input ----
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
@@ -200,6 +355,64 @@ class PwaSsoActivity : AppCompatActivity() {
         return super.dispatchTouchEvent(ev)
     }
 
+    // ---- file chooser (with camera capture merged in) ----
+
+    private fun launchFileChooser(
+        params: WebChromeClient.FileChooserParams?,
+        withCamera: Boolean,
+    ): Boolean {
+        val content = params?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        val chooser = Intent.createChooser(content, "Select or capture")
+        if (withCamera) {
+            val cam = createCameraIntent()
+            if (cam != null && cam.resolveActivity(packageManager) != null) {
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(cam))
+            } else {
+                cameraOutputUri = null
+            }
+        }
+        return try {
+            fileChooserLauncher.launch(chooser)
+            true
+        } catch (e: Exception) {
+            filePathCallback?.onReceiveValue(null)   // don't leave the page input hanging
+            filePathCallback = null
+            cameraOutputUri = null
+            toast("No app available to pick a file")
+            false
+        }
+    }
+
+    /** ACTION_IMAGE_CAPTURE writing to a FileProvider Uri we then hand back to the WebView. */
+    private fun createCameraIntent(): Intent? = try {
+        val dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        val file = File(dir, "capture_${System.currentTimeMillis()}.jpg")
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        cameraOutputUri = uri
+        Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+    } catch (e: Exception) {
+        cameraOutputUri = null
+        null
+    }
+
+    private fun acceptsImage(params: WebChromeClient.FileChooserParams?): Boolean {
+        val types = params?.acceptTypes
+        if (types.isNullOrEmpty() || types.all { it.isBlank() }) return true  // unrestricted
+        return types.any { it.startsWith("image/") || it == "*/*" || it.contains("image") }
+    }
+
+    private fun hasCamera() =
+        packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+
+    private fun isGranted(perm: String) =
+        ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+
     private fun hideKeyboard() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         val token = (currentFocus ?: b.root).windowToken
@@ -207,17 +420,4 @@ class PwaSsoActivity : AppCompatActivity() {
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_LONG).show()
-
-    private companion object {
-        // Minimum app version the backend accepts (base_mobile_api_controller: UNSUPPORTED_APP_VERSION).
-        // Must be >= that. The app-test PWA build sends an `app-version` header from
-        // localStorage['APP-VERSION']; a plain WebView never seeds it, so the backend's
-        // check_old_app_version gate returns 401 "Please update your app" -> the PWA treats the
-        // 401 as session-expiry, wipes the session, and redirects to /login. Seed a valid version
-        // (as the native app does via getLocalStorageDeviceId) so data calls pass and the SSO
-        // session survives -> lands on the deeplink.
-        const val APP_VERSION_SHIM = """
-            (function(){ try { window.localStorage.setItem('APP-VERSION', '99.9.9'); } catch(e){} })();
-        """
-    }
 }

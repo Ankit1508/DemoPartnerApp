@@ -12,11 +12,12 @@ Single screen with two CTAs: **Proceed with PWA** / **Proceed with Partner API**
 ### PWA SSO (`PwaSsoActivity`)
 - Builds the partner payload (`entity_id, email, first_name, …, requested_at`).
 - AES-256-GCM encrypts it (`AesGcm.kt`) → `message` + `auth_tag` (URL-safe base64), byte-compatible with the backend `AesEncryption.gcm_decrypt`.
-- Loads `<host>/pwa-login?slug&message&auth_tag` in a WebView. The PWA posts to `/v1/customers/pwa-sso/:slug`, persists the session, and redirects to the deeplink.
+- Loads `<host>/pwa-login?slug&message&auth_tag` in a WebView with the `ekincareAndroidInterface` JS bridge injected (`bridge/`, mirrors the EkincarePwa app). The PWA posts to `/v1/customers/pwa-sso/:slug`, persists the session, exports it to native via the bridge (`saveHeaders`/`saveCustomer`), and redirects to the deeplink.
 
 Notes baked in from real debugging:
 - Query string is built manually — `Uri.appendQueryParameter` percent-encodes the base64 `=` padding to `%3D`, which the backend fails to decode.
-- Seeds `APP-VERSION` in `localStorage` before the PWA runs. The PWA sends an `app-version` header on every data call; the backend rejects versions below its minimum with `401 "Please update your app"`, which the PWA treats as session-expiry → bounces to login. Seeding a valid version keeps the SSO session alive.
+- Seeds `APP-VERSION` (+ `X-DEVICE-ID`, device info) in `localStorage` before the PWA runs. The PWA sends an `app-version` header on every data call; the backend rejects versions below its minimum with `401 "Please update your app"`, which the PWA treats as session-expiry → bounces to login. Seeding a valid version keeps the SSO session alive.
+- The bridge (`WebViewMethodHandler`) services the PWA's native calls — permissions, location, share, external URL, downloads, etc. It is safe to inject and does NOT break the web SSO session (the PWA's SSO flow expects it).
 - HTML5 geolocation is granted via `WebChromeClient`.
 
 ### Partner REST API (`PartnerApiActivity`)
