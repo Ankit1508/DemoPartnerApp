@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.util.Base64
@@ -13,6 +14,7 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
 import android.webkit.GeolocationPermissions
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -85,6 +87,23 @@ class PwaSsoActivity :
     private val bridgeLocationLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             methodHandler.reportLocation()
+        }
+
+    // <input type="file"> support — the WebChromeClient hands us the callback,
+    // we open the system picker and return the chosen Uri(s) to the page.
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val fileChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val cb = filePathCallback ?: return@registerForActivityResult
+            filePathCallback = null
+            // parseResult handles both a single Uri and multi-select (clipData); null on cancel.
+            val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
+                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            } else {
+                null
+            }
+            cb.onReceiveValue(uris)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -215,6 +234,25 @@ class PwaSsoActivity :
                             Manifest.permission.ACCESS_COARSE_LOCATION,
                         ),
                     )
+                }
+            }
+
+            // <input type="file"> — open the system picker (honors accept types +
+            // multiple from the page) and return the result to the WebView.
+            override fun onShowFileChooser(
+                webView: WebView?,
+                callback: ValueCallback<Array<Uri>>?,
+                params: FileChooserParams?,
+            ): Boolean {
+                filePathCallback?.onReceiveValue(null)   // cancel any pending request
+                filePathCallback = callback
+                return try {
+                    fileChooserLauncher.launch(params?.createIntent())
+                    true
+                } catch (e: Exception) {
+                    filePathCallback = null
+                    toast("No app available to pick a file")
+                    false
                 }
             }
         }
