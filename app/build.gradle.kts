@@ -22,7 +22,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.demopartnerapp"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -30,7 +30,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Defaults prefilled into the runtime forms. Override in local.properties.
-        buildConfigField("String", "EKIN_PWA_HOST", "\"${prop("EKIN_PWA_HOST", "https://staging.ekincare.com")}\"")
+        buildConfigField("String", "EKIN_PWA_HOST", "\"${prop("EKIN_PWA_HOST", "https://pwa-staging.ekincare.com")}\"")
         buildConfigField("String", "EKIN_API_BASE", "\"${prop("EKIN_API_BASE", "https://staging.ekincare.com")}\"")
         buildConfigField("String", "EKIN_PARTNER_SLUG", "\"${prop("EKIN_PARTNER_SLUG")}\"")
         buildConfigField("String", "EKIN_ENCODED_KEY", "\"${prop("EKIN_ENCODED_KEY")}\"")
@@ -65,6 +65,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
     implementation(libs.okhttp)
+    implementation(libs.androidx.connect.client)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

@@ -27,11 +27,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.lifecycleScope
 import com.example.demopartnerapp.bridge.BridgeLocalStorage
 import com.example.demopartnerapp.bridge.JavaScriptInterfaceee
 import com.example.demopartnerapp.bridge.PwaKeys
 import com.example.demopartnerapp.bridge.WebViewMethodHandler
 import com.example.demopartnerapp.databinding.ActivityPwaSsoBinding
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 
@@ -121,6 +123,22 @@ class PwaSsoActivity :
             launchFileChooser(pendingChooserParams, withCamera = granted)
         }
 
+    // Connect wearable via Health Connect (steps + calories).
+    private val healthConnect by lazy { HealthConnectHelper(this, b.webView) }
+
+    private val healthPermLauncher =
+        registerForActivityResult(
+            androidx.health.connect.client.PermissionController.createRequestPermissionResultContract(),
+        ) { granted ->
+            if (granted.containsAll(healthConnect.permissions)) {
+                healthConnect.notifyConnected()
+                lifecycleScope.launch { healthConnect.syncSteps() }
+                toast("Wearable connected")
+            } else {
+                toast("Health permissions denied")
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -134,24 +152,60 @@ class PwaSsoActivity :
         b.btnLaunch.setOnClickListener { launch() }
     }
 
+    private val formPrefs by lazy { getSharedPreferences("pwa_sso_form", MODE_PRIVATE) }
+
+    // Persisted key -> field. Same order used for prefill + save.
+    private fun formFields(): List<Pair<String, EditText>> = listOf(
+        "host" to b.etPwaHost,
+        "slug" to b.etSlug,
+        "key" to b.etKey,
+        "iv" to b.etIv,
+        "entity_id" to b.etEntityId,
+        "email" to b.etEmail,
+        "first_name" to b.etFirstName,
+        "last_name" to b.etLastName,
+        "gender" to b.etGender,
+        "mobile" to b.etMobile,
+        "member_id" to b.etMemberId,
+        "dob" to b.etDob,
+        "deeplink" to b.etDeeplink,
+    )
+
+    // First-run defaults (BuildConfig config + a sample customer). Used until the
+    // user fills the form once; after that the last-entered values take over.
+    private fun formDefaults(): Map<String, String> = mapOf(
+        "host" to BuildConfig.EKIN_PWA_HOST,
+        "slug" to BuildConfig.EKIN_PARTNER_SLUG,
+        "key" to BuildConfig.EKIN_ENCODED_KEY,
+        "iv" to BuildConfig.EKIN_ENCODED_IV,
+        "entity_id" to BuildConfig.EKIN_ENTITY_ID,
+        "email" to "demo.user@ekincare.com",
+        "first_name" to "Demo",
+        "last_name" to "User",
+        "gender" to "Male",
+        "mobile" to "9999900001",
+        "member_id" to "DEMO-001",
+        "dob" to "1990-01-15",
+        "deeplink" to "benefits",
+    )
+
+    /** Prefill from the last-saved values, falling back to first-run defaults. */
     private fun prefill() {
-        b.etPwaHost.setText(BuildConfig.EKIN_PWA_HOST)
-        b.etSlug.setText(BuildConfig.EKIN_PARTNER_SLUG)
-        b.etKey.setText(BuildConfig.EKIN_ENCODED_KEY)
-        b.etIv.setText(BuildConfig.EKIN_ENCODED_IV)
-        b.etEntityId.setText(BuildConfig.EKIN_ENTITY_ID)
-        // Sample customer — SSO creates/updates this user under the entity on login. Edit at runtime.
-        b.etEmail.setText("demo.user@ekincare.com")
-        b.etFirstName.setText("Demo")
-        b.etLastName.setText("User")
-        b.etGender.setText("Male")
-        b.etMobile.setText("9999900001")
-        b.etMemberId.setText("DEMO-001")
-        b.etDob.setText("1990-01-15")
-        b.etDeeplink.setText("benefits")
+        val defaults = formDefaults()
+        formFields().forEach { (key, field) ->
+            field.setText(formPrefs.getString(key, defaults[key]))
+        }
+    }
+
+    /** Persist the current field values so they're prefilled next time. */
+    private fun saveDetails() {
+        formPrefs.edit().apply {
+            formFields().forEach { (key, field) -> putString(key, field.text.toString()) }
+        }.apply()
     }
 
     private fun launch() {
+        saveDetails()   // remember what the user entered for next time
         val host = b.etPwaHost.text.toString().trim().trimEnd('/')
         val slug = b.etSlug.text.toString().trim()
         val key = b.etKey.text.toString().trim()
@@ -328,6 +382,42 @@ class PwaSsoActivity :
         )
     }
 
+    override fun connectHealthConnect() {
+        if (!healthConnect.isAvailable()) {
+            if (healthConnect.providerUpdateRequired()) openHealthConnectInStore()
+            else toast("Health Connect not available on this device")
+            return
+        }
+        lifecycleScope.launch {
+            if (healthConnect.hasAllPermissions()) {
+                healthConnect.notifyConnected()
+                healthConnect.syncSteps()
+                toast("Wearable connected")
+            } else {
+                healthPermLauncher.launch(healthConnect.permissions)
+            }
+        }
+    }
+
+    override fun syncHealthSteps() {
+        lifecycleScope.launch { healthConnect.syncSteps() }
+    }
+
+    override fun disconnectHealthConnect() {
+        healthConnect.notifyDisconnected()
+        lifecycleScope.launch { healthConnect.revoke() }
+        toast("Wearable disconnected")
+    }
+
+    private fun openHealthConnectInStore() {
+        runCatching {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.google.android.apps.healthdata"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { toast("Install Health Connect to connect a wearable") }
+    }
+
     // ---- lifecycle / input ----
 
     @Deprecated("Deprecated in Java")
@@ -412,6 +502,12 @@ class PwaSsoActivity :
 
     private fun isGranted(perm: String) =
         ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+
+    override fun onPause() {
+        super.onPause()
+        // Persist edits even if the user leaves without tapping Launch.
+        saveDetails()
+    }
 
     private fun hideKeyboard() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager

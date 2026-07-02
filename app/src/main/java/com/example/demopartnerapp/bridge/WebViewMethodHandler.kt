@@ -40,6 +40,15 @@ class WebViewMethodHandler(private val host: BridgeHost) {
 
         /** Prompt for location if needed, then have the handler report coords. */
         fun promptLocationThenReport()
+
+        /** Connect wearable: check Health Connect availability + request permissions, then sync. */
+        fun connectHealthConnect()
+
+        /** Read Health Connect steps/calories and push a syncSteps event to the PWA. */
+        fun syncHealthSteps()
+
+        /** Disconnect wearable: notify the PWA + revoke Health Connect permissions. */
+        fun disconnectHealthConnect()
     }
 
     private val ctx: Context get() = host.hostActivity
@@ -96,13 +105,15 @@ class WebViewMethodHandler(private val host: BridgeHost) {
                 )
             }
 
-            "disconnecthealthconnect" ->
-                JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.disconnectHealthConnect())
+            // Connect wearable via Health Connect (steps + calories).
+            "connecthealthconnectwearable" -> host.connectHealthConnect()
+            "syncsteps" -> host.syncHealthSteps()
+            "disconnecthealthconnect" -> host.disconnectHealthConnect()
+
+            // Legacy Google Fit path — not implemented in the demo.
+            "connectnativewearable" -> toast("Google Fit not supported in demo")
             "disconnectnativewearable" ->
                 JavaScriptEvaluator.sendToPwa(web, JavaScriptCodeBuilder.disconnectNativeWearable())
-
-            "connecthealthconnectwearable", "connectnativewearable", "syncsteps" ->
-                toast("Wearable/steps not supported in demo")
 
             "joinstreamcall", "endstreamcall" -> toast("Video calls not supported in demo")
             "open_qr_scanner" -> toast("QR scanner not supported in demo")
